@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using HandlebarsDotNet;
@@ -156,6 +157,8 @@ namespace CsToTs.TypeScript {
         }
         
         private static IEnumerable<MemberDefinition> GetMembers(Type type, TypeScriptContext context) {
+            var shouldGenerateMember = context.Options.ShouldGenerateMember;
+            if (shouldGenerateMember == null) return Enumerable.Empty<MemberDefinition>();
             var memberRenamer = context.Options.MemberRenamer ?? new Func<MemberInfo,string>(x => x.Name);
             var useDecorators = context.Options.UseDecorators ?? new Func<MemberInfo, IEnumerable<string>>(_=> (new List<string>()));
 
@@ -171,26 +174,41 @@ namespace CsToTs.TypeScript {
                         nullable = true;
                     }
 
-                    return new MemberDefinition(memberRenamer(f), GetTypeRef(fieldType, context), nullable, useDecorators(f).ToList());
+                    var memberDefinition = new MemberDefinition(memberRenamer(f), GetTypeRef(fieldType, context), nullable, useDecorators(f).ToList());
+                    if (shouldGenerateMember(f, memberDefinition))
+                    {
+                        return memberDefinition;
+                    }
+
+                    return null;
                 })
                 .ToList();
 
             memberDefs.AddRange(
                 type.GetProperties(BindingFlags)
-                .Select(p => {
-                    var propertyType = p.PropertyType;
-                    var nullable = false;
-                    if (propertyType.IsGenericType && propertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                    .Select(p =>
                     {
-                        // choose the generic parameter, rather than the nullable
-                        propertyType = propertyType.GetGenericArguments()[0];
-                        nullable = true;
-                    }
-                        return new MemberDefinition(memberRenamer(p), GetTypeRef(propertyType, context), nullable, useDecorators(p).ToList());
-                    })
-                );
+                        var propertyType = p.PropertyType;
+                        var nullable = false;
+                        if (propertyType.IsGenericType && propertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                        {
+                            // choose the generic parameter, rather than the nullable
+                            propertyType = propertyType.GetGenericArguments()[0];
+                            nullable = true;
+                        }
+                        
+                        var memberDefinition =  new MemberDefinition(memberRenamer(p), GetTypeRef(propertyType, context), nullable,
+                            useDecorators(p).ToList());
+                        if (shouldGenerateMember(p, memberDefinition))
+                        {
+                            return memberDefinition;
+                        }
 
-            return memberDefs;
+                        return null;
+                    }).ToList()
+            );
+
+            return memberDefs.Where(md => md != null).ToList();
         }
 
         private static IEnumerable<MethodDefinition> GetMethods(Type type, TypeScriptContext context) {
@@ -229,6 +247,16 @@ namespace CsToTs.TypeScript {
             return retVal;
         }
 
+        private static TypeCode GetTypeCode(Type type)
+        {
+            if (type == typeof(Guid))
+            {
+                return TypeCode.String;
+            }
+
+            return Type.GetTypeCode(type);
+        }
+
         private static string GetTypeRef(Type type, TypeScriptContext context) {
             if (type.IsGenericParameter)
                 return type.Name;
@@ -238,15 +266,16 @@ namespace CsToTs.TypeScript {
                 return enumDef != null ? enumDef.Name : "any";
             }
 
-            var typeCode = Type.GetTypeCode(type);
+            var typeCode = GetTypeCode(type);
             if (typeCode != TypeCode.Object) 
                 return GetPrimitiveMemberType(typeCode, context.Options);
 
-            var enumerable = type.GetInterfaces()
-                .FirstOrDefault(i => i.IsConstructedGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-            if (enumerable != null)
-                return $"Array<{GetTypeRef(enumerable.GetGenericArguments().First(), context)}>";
-                
+            var dictionaryType = ExtractDictionaryType(type, context);
+            if (dictionaryType != null) return dictionaryType;
+            
+            var enumerableType = ExtractEnumerableType(type, context);
+            if (enumerableType != null) return enumerableType;
+
             var typeDef = PopulateTypeDefinition(type, context);
             if (typeDef == null) 
                 return "any";
@@ -259,7 +288,48 @@ namespace CsToTs.TypeScript {
 
             return typeName;
         }
-        
+
+        private static string ExtractDictionaryType(Type type, TypeScriptContext context)
+        {
+            var dictionaryInterface = type.GetInterfaces().Concat(new[] { type }).FirstOrDefault(t =>
+                t.IsConstructedGenericType && t.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+            if (dictionaryInterface == null)
+            {
+                return null;
+            }
+
+            var genericArguments = dictionaryInterface.GetGenericArguments();
+            var keyType = GetTypeRef(genericArguments[0], context);
+            var valueType = GetTypeRef(genericArguments[1], context);
+            return $"{{ [key: {keyType}]: {valueType} }}";
+        }
+
+        private static string ExtractEnumerableType(Type type, TypeScriptContext context)
+        {
+            Type enumerableGenericArgument = null;
+            if (type.IsInterface && type.IsConstructedGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            {
+                enumerableGenericArgument = type.GetGenericArguments().Single();
+            }
+            else if (type.IsInterface && type == typeof(IEnumerable))
+            {
+                enumerableGenericArgument = typeof(object);
+            }
+            else
+            {
+                enumerableGenericArgument = type.GetInterfaces()
+                    .FirstOrDefault(i => i.IsConstructedGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                    ?.GetGenericArguments().Single();
+            }
+
+            if (enumerableGenericArgument != null)
+            {
+                return $"Array<{GetTypeRef(enumerableGenericArgument, context)}>";
+            }
+
+            return null;
+        }
+
         private static string GetPrimitiveMemberType(TypeCode typeCode, TypeScriptOptions options) {
             switch (typeCode) {
                 case TypeCode.Boolean:

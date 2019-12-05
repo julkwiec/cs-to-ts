@@ -3,12 +3,11 @@
   <metadata>
     <id>CsToTs.Mod</id>
     <version>2.0.0</version>
-    <authors>Umut Özel - Doğuş Teknoloji, Julian Kwieciński</authors>
+    <authors>Umut Özel - Doğuş Teknoloji,Julian Kwieciński</authors>
     <owners>Julian Kwieciński</owners>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    <licenseUrl>https://github.com/julkwiec/cs-to-ts/blob/master/LICENSE</licenseUrl>
+    <license type="expression">MIT</license>
     <projectUrl>https://github.com/julkwiec/cs-to-ts</projectUrl>
-    <iconUrl>https://image.ibb.co/jaMnen/cs2ts_128.png</iconUrl>
     <description>Generate TypeScript from C#.</description>
     <copyright>Copyright (c) 2018</copyright>
     <tags>C# CSharp TypeScript converter generator</tags>
@@ -19,7 +18,4 @@
       </group>
     </dependencies>
   </metadata>
-  <files>
-    <file src="src\CsToTs\bin\Release\netstandard2.0\CsToTs.dll" target="lib\netstandard2.0\CsToTs.dll" />
-  </files>
 </package>
